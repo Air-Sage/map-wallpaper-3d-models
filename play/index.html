@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>地图壁纸 · 逐物体建模试玩</title>
+<style>
+:root{--ink:#eef3f8;--dim:#a6b4c4;--bg:#10151c;--card:#19212c;--line:#2b3746;--acc:#ffb85c}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#c.drag{cursor:grabbing}
+#menu{position:fixed;inset:0;overflow:auto;padding:26px clamp(16px,4vw,48px) 56px;background:var(--bg);z-index:5}
+#menu h1{margin:0 0 4px;font-size:22px;letter-spacing:.02em}
+#menu p{margin:0 0 20px;color:var(--dim);max-width:70ch}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;color:inherit;text-decoration:none;transition:transform .12s,border-color .12s}
+.card:hover,.card:focus-visible{transform:translateY(-2px);border-color:var(--acc);outline:none}
+.card img{display:block;width:100%;aspect-ratio:12/7;object-fit:cover;background:#0c1016}
+.card div{display:flex;justify-content:space-between;align-items:baseline;padding:8px 11px 9px}
+.card b{font-size:16px;font-variant-numeric:tabular-nums}
+.card span{color:var(--dim);font-size:12px}
+#hud{position:fixed;inset:0;pointer-events:none;z-index:3}
+#hud>*{pointer-events:auto}
+#title{position:absolute;left:14px;top:12px;padding:6px 12px;border-radius:9px;background:rgba(12,17,24,.62);backdrop-filter:blur(6px)}
+#title b{font-size:17px;margin-right:9px;font-variant-numeric:tabular-nums}
+#title span{color:#d5dee8;font-size:12.5px}
+#btns{position:absolute;right:12px;top:12px;display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end;max-width:70vw}
+button{font:inherit;color:var(--ink);background:rgba(12,17,24,.66);border:1px solid rgba(255,255,255,.2);border-radius:9px;padding:6px 12px;cursor:pointer;backdrop-filter:blur(6px)}
+button:hover{border-color:var(--acc)}
+#orig{position:absolute;right:12px;top:58px;width:min(34vw,420px);border-radius:8px;border:1px solid rgba(255,255,255,.35);box-shadow:0 6px 24px rgba(0,0,0,.4)}
+#help{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);padding:6px 14px;border-radius:9px;background:rgba(12,17,24,.6);color:#e3eaf2;font-size:12.5px;white-space:nowrap;pointer-events:none;max-width:96vw;overflow:hidden;text-overflow:ellipsis}
+#stick{position:absolute;left:26px;bottom:60px;width:120px;height:120px;border-radius:50%;background:rgba(12,17,24,.35);border:1px solid rgba(255,255,255,.3);pointer-events:none}
+#stick i{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px;border-radius:50%;background:rgba(255,255,255,.6)}
+#jump{position:absolute;right:30px;bottom:74px;width:74px;height:74px;border-radius:50%;font-size:17px}
+#loading{position:fixed;inset:0;z-index:4;display:grid;place-items:center;background:rgba(10,14,20,.9)}
+#loading>div{width:min(360px,80vw);text-align:center}
+#loading b{display:block;font-size:30px;font-variant-numeric:tabular-nums}
+#loading span{color:var(--dim)}
+.bar{height:5px;border-radius:3px;background:#26303d;margin-top:14px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .15s}
+</style>
+<script type="importmap">{"imports":{"three":"./lib/three.module.min.js","three/addons/":"./lib/jsm/"}}</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud" hidden>
+  <div id="title"><b id="mapNo"></b><span id="mapInfo"></span></div>
+  <div id="btns">
+    <button data-act="view" title="快捷键 V">视角：<span id="viewName">第三人称</span></button>
+    <button data-act="orig" title="快捷键 P">对照原图</button>
+    <button data-act="prev" title="快捷键 [">上一张</button>
+    <button data-act="next" title="快捷键 ]">下一张</button>
+    <button data-act="menu" title="快捷键 M">地图列表</button>
+  </div>
+  <img id="orig" alt="原图" hidden>
+  <div id="help">WASD / 方向键 移动 · 按住鼠标拖动 转视角 · 滚轮 远近 · 空格 跳 · Shift 跑 · V 换视角 · R 回起点</div>
+  <div id="stick" hidden><i></i></div>
+  <button id="jump" hidden>跳</button>
+</div>
+<div id="loading" hidden><div><b id="loadNo"></b><span id="loadText">加载中</span><div class="bar"><i id="loadBar"></i></div></div></div>
+<div id="menu">
+  <h1>地图壁纸 · 逐物体建模试玩</h1>
+  <p id="menuNote">读取地图列表…</p>
+  <div id="grid"></div>
+</div>
+
+<script type="module">
+// Walkable preview of the per-object maps. Nothing is pre-assembled: the page reads maps/<id>/objects.json,
+// loads models/<object>.glb and refs/ground.png and puts every instance in place the same way tools/assemble.py does
+// (world 24 x 16 m, plan top = north = -Z here, models face south = +Z, origin of a model at its bottom centre, sized to width_m).
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';   // the published copy carries meshopt-packed models
+
+const $ = id => document.getElementById(id), clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const canvas = $('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene(), SKY = new THREE.Color(0xa9cdf2);
+scene.background = SKY; scene.fog = new THREE.Fog(SKY, 46, 125);
+const camera = new THREE.PerspectiveCamera(58, 1, 0.08, 300); camera.rotation.order = 'YXZ';
+const hemi = new THREE.HemisphereLight(0xe2eeff, 0xa39d8c, 2.15); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff1dc, 1.75); sun.position.set(-15, 27, 19); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.06;
+Object.assign(sun.shadow.camera, { left: -19, right: 19, top: 19, bottom: -19, near: 1, far: 95 });
+scene.add(sun, sun.target);
+const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), texLoader = new THREE.TextureLoader();
+
+const CELL = 0.08, STEP = 0.35, RADIUS = 0.26, GRAV = 14, JUMP = 5.6;
+const S = { id: null, list: [], spec: null, world: null, top: null, GW: 0, GD: 0, Wm: 24, Dm: 16, mode: 'third', yaw: 0, pitch: 0.3, dist: 4.4, camD: 4.4, camY: 0,
+  P: { x: 0, z: 0, y: 0, vy: 0, ground: true, head: Math.PI, phase: 0, speed: 0 }, spawn: { x: 0, z: 0, yaw: 0 }, keys: new Set(), stick: { x: 0, y: 0 }, jump: false, busy: false, token: 0 };
+window.G = S;
+
+// ---------- the walker: a small original explorer figure made of simple shapes ----------
+const hero = new THREE.Group(), limbs = {};
+(function () {
+  const mat = c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.75 });
+  const add = (geo, m, x, y, z, parent = hero) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = true; parent.add(o); return o; };
+  add(new THREE.CapsuleGeometry(0.2, 0.36, 6, 16), mat(0xf07a4a), 0, 0.82, 0);                       // jacket
+  add(new THREE.SphereGeometry(0.19, 22, 16), mat(0xffd9b5), 0, 1.31, 0);                              // head
+  add(new THREE.SphereGeometry(0.2, 22, 12, 0, Math.PI * 2, 0, Math.PI * 0.48), mat(0x3a2c28), 0, 1.335, -0.012); // hair
+  add(new THREE.BoxGeometry(0.27, 0.33, 0.15), mat(0x3f6fb4), 0, 0.86, -0.22);                         // pack
+  for (const sx of [-1, 1]) {
+    add(new THREE.SphereGeometry(0.026, 10, 8), mat(0x1c1c22), sx * 0.07, 1.33, 0.172);                // eyes
+    const leg = new THREE.Group(); leg.position.set(sx * 0.1, 0.56, 0); hero.add(leg); add(new THREE.CapsuleGeometry(0.075, 0.34, 4, 10), mat(0x33455c), 0, -0.26, 0, leg); limbs['leg' + sx] = leg;
+    const arm = new THREE.Group(); arm.position.set(sx * 0.26, 1.02, 0); hero.add(arm); add(new THREE.CapsuleGeometry(0.058, 0.28, 4, 10), mat(0xf07a4a), 0, -0.2, 0, arm); limbs['arm' + sx] = arm;
+  }
+  scene.add(hero);
+})();
+
+// ---------- loading one map ----------
+function rimColour(img) {               // the colour of the ground picture's border, for the plain land around the map
+  const w = 96, h = 64, cv = document.createElement('canvas'); cv.width = w; cv.height = h; const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, w, h);
+  const d = cx.getImageData(0, 0, w, h).data; let r = 0, g = 0, b = 0, n = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (x < 3 || y < 3 || x >= w - 3 || y >= h - 3) { const q = (y * w + x) * 4; r += d[q]; g += d[q + 1]; b += d[q + 2]; n++; }
+  return new THREE.Color().setRGB(r / n / 255, g / n / 255, b / n / 255, THREE.SRGBColorSpace).multiplyScalar(0.8);
+}
+function alphaLookup(tex) {             // where a model's picture is see-through there is nothing to bump into
+  const img = tex.image; if (!img) return null;
+  const w = 256, h = 256, cv = document.createElement('canvas'); cv.width = w; cv.height = h; const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(img, 0, 0, w, h);
+  const d = cx.getImageData(0, 0, w, h).data;
+  return (u, v) => { u -= Math.floor(u); v -= Math.floor(v); return d[(Math.min(h - 1, v * h | 0) * w + Math.min(w - 1, u * w | 0)) * 4 + 3]; };
+}
+function samplePoints(holder, useAlpha) {   // points spread over a model's surface (model space, metres), dense enough to fill the walk grid
+  const out = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), SP = CELL * 0.6;
+  holder.updateMatrixWorld(true);
+  holder.traverse(m => {
+    if (!m.isMesh) return;
+    const g = m.geometry, pos = g.attributes.position, uv = g.attributes.uv, idx = g.index, mw = m.matrixWorld;
+    const alpha = useAlpha && m.material.alphaTest > 0 && m.material.map && uv ? alphaLookup(m.material.map) : null;
+    const nTri = (idx ? idx.count : pos.count) / 3;
+    for (let t = 0; t < nTri; t++) {
+      const i0 = idx ? idx.getX(t * 3) : t * 3, i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      a.fromBufferAttribute(pos, i0).applyMatrix4(mw); b.fromBufferAttribute(pos, i1).applyMatrix4(mw); c.fromBufferAttribute(pos, i2).applyMatrix4(mw);
+      const e = Math.max(Math.hypot(b.x - a.x, b.z - a.z), Math.hypot(c.x - a.x, c.z - a.z), Math.hypot(c.x - b.x, c.z - b.z)), n = clamp(Math.ceil(e / SP), 1, 240);
+      let u0, v0, u1, v1, u2, v2; if (alpha) { u0 = uv.getX(i0); v0 = uv.getY(i0); u1 = uv.getX(i1); v1 = uv.getY(i1); u2 = uv.getX(i2); v2 = uv.getY(i2); }
+      for (let i = 0; i <= n; i++) for (let j = 0; j <= n - i; j++) {
+        const s = i / n, r = j / n, q = 1 - s - r;
+        if (alpha && alpha(q * u0 + s * u1 + r * u2, q * v0 + s * v1 + r * v2) < 128) continue;
+        out.push(q * a.x + s * b.x + r * c.x, q * a.y + s * b.y + r * c.y, q * a.z + s * b.z + r * c.z);
+      }
+    }
+  });
+  return new Float32Array(out);
+}
+const place = (at, Wm, Dm) => [(at[0] / 100 - 0.5) * Wm, (at[1] / 100 - 0.5) * Dm, (at[2] || 0) * Math.PI / 180, at[3] || 1];
+
+function buildGrid(models, Wm, Dm) {    // top[cell] = height of whatever solid thing stands there (0 = open ground)
+  const GW = Math.round(Wm / CELL), GD = Math.round(Dm / CELL), n = GW * GD, top = new Float32Array(n), lo = new Float32Array(n), hi = new Float32Array(n);
+  for (const m of models) {
+    if (m.o.leafy) continue;            // ferns and grass: walk through
+    for (const at of m.o.at) {
+      const [px, pz, yaw, s] = place(at, Wm, Dm), co = Math.cos(yaw), si = Math.sin(yaw), p = m.pts;
+      lo.fill(Infinity); hi.fill(-Infinity); let i0 = GW, i1 = -1, j0 = GD, j1 = -1;
+      for (let k = 0; k < p.length; k += 3) {
+        const x = p[k] * s, y = p[k + 1] * s, z = p[k + 2] * s, i = Math.floor((px + x * co + z * si + Wm / 2) / CELL), j = Math.floor((pz - x * si + z * co + Dm / 2) / CELL);
+        if (i < 0 || j < 0 || i >= GW || j >= GD) continue;
+        const q = j * GW + i; if (y < lo[q]) lo[q] = y; if (y > hi[q]) hi[q] = y;
+        if (i < i0) i0 = i; if (i > i1) i1 = i; if (j < j0) j0 = j; if (j > j1) j1 = j;
+      }
+      // solid where the object comes down below head height; a crown that only hangs overhead leaves the ground free
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const q = j * GW + i; if (lo[q] < 1.7 && hi[q] > 0.14 && hi[q] > top[q]) top[q] = hi[q]; }
+    }
+  }
+  return { top, GW, GD };
+}
+
+function gAt(x, z) { const i = Math.floor((x + S.Wm / 2) / CELL), j = Math.floor((z + S.Dm / 2) / CELL); return i < 0 || j < 0 || i >= S.GW || j >= S.GD ? 99 : S.top[j * S.GW + i]; }
+const RING = Array.from({ length: 8 }, (_, k) => [Math.cos(k * Math.PI / 4), Math.sin(k * Math.PI / 4)]);
+function blockH(x, z) { let h = gAt(x, z); for (const [dx, dz] of RING) { const v = gAt(x + dx * RADIUS, z + dz * RADIUS); if (v > h) h = v; } return h; }
+function floorH(x, z) { let h = gAt(x, z); for (let k = 0; k < 8; k += 2) { const v = gAt(x + RING[k][0] * 0.12, z + RING[k][1] * 0.12); if (v < 90 && v > h) h = v; } return h; }
+
+function findSpawn() {                  // a roomy spot in the biggest open area, towards the front (south) of the map, facing an open direction
+  const { GW, GD, top, Wm, Dm } = S, n = GW * GD, D = new Float32Array(n);
+  for (let q = 0; q < n; q++) D[q] = top[q] < 0.15 ? 1e4 : 0;
+  const at = (i, j) => i < 0 || j < 0 || i >= GW || j >= GD ? 0 : D[j * GW + i];
+  for (let j = 0; j < GD; j++) for (let i = 0; i < GW; i++) { const q = j * GW + i; if (D[q]) D[q] = Math.min(D[q], at(i - 1, j) + 1, at(i, j - 1) + 1, at(i - 1, j - 1) + 1.41, at(i + 1, j - 1) + 1.41); }
+  for (let j = GD - 1; j >= 0; j--) for (let i = GW - 1; i >= 0; i--) { const q = j * GW + i; if (D[q]) D[q] = Math.min(D[q], at(i + 1, j) + 1, at(i, j + 1) + 1, at(i + 1, j + 1) + 1.41, at(i - 1, j + 1) + 1.41); }
+  const lab = new Int32Array(n), stack = new Int32Array(n); let best = 0, bestN = 0, cur = 0;
+  for (let q0 = 0; q0 < n; q0++) {
+    if (lab[q0] || D[q0] < 5) continue;
+    let sp = 0, cnt = 0; stack[sp++] = q0; lab[q0] = ++cur;
+    while (sp) { const q = stack[--sp], i = q % GW; cnt++;
+      if (i > 0 && !lab[q - 1] && D[q - 1] >= 5) { lab[q - 1] = cur; stack[sp++] = q - 1; }
+      if (i < GW - 1 && !lab[q + 1] && D[q + 1] >= 5) { lab[q + 1] = cur; stack[sp++] = q + 1; }
+      if (q >= GW && !lab[q - GW] && D[q - GW] >= 5) { lab[q - GW] = cur; stack[sp++] = q - GW; }
+      if (q < n - GW && !lab[q + GW] && D[q + GW] >= 5) { lab[q + GW] = cur; stack[sp++] = q + GW; } }
+    if (cnt > bestN) { bestN = cnt; best = cur; }
+  }
+  let sx = 0, sz = Dm * 0.3, sc = -1e9, maxD = 0;
+  const runFrom = (x, z, a, lim) => { let d = 0; while (d < lim && gAt(x - Math.sin(a) * (d + 0.16), z - Math.cos(a) * (d + 0.16)) < 0.35) d += 0.16; return d; };
+  if (best) { for (let q = 0; q < n; q++) if (lab[q] === best && D[q] > maxD) maxD = D[q]; }
+  const need = Math.min(maxD, 12) * 0.8;      // roomy enough, then: room ahead to the north (the side the picture looks at) and close to the front middle
+  if (best) for (let q = 0; q < n; q++) {
+    if (lab[q] !== best || D[q] < need) continue;
+    const x = (q % GW + 0.5) * CELL - Wm / 2, z = ((q / GW | 0) + 0.5) * CELL - Dm / 2, v = Math.min(runFrom(x, z, 0, 6), 6) * 1.2 + Math.min(runFrom(x, z, Math.PI, 4.5), Dm / 2 - z + 1.5, 4.5) * 1.1 + Math.min(D[q], 16) * 0.1 - Math.hypot(x, z - Dm * 0.3);      // room behind as well, for the camera
+    if (v > sc) { sc = v; sx = x; sz = z; }
+  }
+  const run = k => runFrom(sx, sz, k * Math.PI / 8, 12);
+  let yaw = 0; if (run(0) < 2) { let bd = -1; for (let k = 0; k < 16; k++) { const d = run(k) - Math.min(k, 16 - k) * 0.12; if (d > bd) { bd = d; yaw = k * Math.PI / 8; } } }
+  S.spawn = { x: sx, z: sz, yaw, open: bestN * CELL * CELL };
+}
+function respawn() { const P = S.P; P.x = S.spawn.x; P.z = S.spawn.z; P.y = S.camY = 0; P.vy = 0; P.ground = true; P.head = Math.PI + S.spawn.yaw; S.yaw = S.spawn.yaw; S.pitch = S.mode === 'first' ? 0 : 0.3; S.camD = S.dist; }
+
+function disposeWorld() {
+  if (!S.world) return; scene.remove(S.world);
+  S.world.traverse(o => { if (!o.isMesh) return; o.geometry.dispose(); for (const m of [].concat(o.material)) { if (m.map) { if (m.map.image && m.map.image.close) m.map.image.close(); m.map.dispose(); } m.dispose(); } });
+  S.world = null; S.top = null;
+}
+const tick = () => new Promise(r => setTimeout(r, 0));
+function progress(f, text) { $('loadBar').style.width = Math.round(f * 100) + '%'; if (text) $('loadText').textContent = text; }
+
+async function enter(id) {
+  const token = ++S.token; S.busy = true; S.id = id;
+  $('menu').hidden = true; $('hud').hidden = true; $('loading').hidden = false; $('loadNo').textContent = id; progress(0.03, '读取物体清单');
+  disposeWorld();
+  try {
+    const base = '../maps/' + id + '/', spec = await (await fetch(base + 'objects.json', { cache: 'no-cache' })).json();
+    const Wm = spec.world.width_m || 24, Dm = spec.world.depth_m || 16, world = new THREE.Group();
+    let gtex = null; try { gtex = await texLoader.loadAsync(base + S.files.ground); gtex.colorSpace = THREE.SRGBColorSpace; gtex.anisotropy = 8; } catch (e) { /* plain ground */ }
+    const edge = gtex ? rimColour(gtex.image) : new THREE.Color(0x4a6b3a);
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(Wm, Dm).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ map: gtex, color: gtex ? 0xffffff : edge, roughness: 1 })); ground.receiveShadow = true; world.add(ground);
+    const apron = new THREE.Mesh(new THREE.PlaneGeometry(Wm * 12, Dm * 12).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: edge, roughness: 1 })); apron.position.y = -0.02; apron.receiveShadow = true; world.add(apron);
+    let done = 0; const total = spec.objects.length;
+    const models = (await Promise.all(spec.objects.map(async o => {
+      try {
+        const gltf = await gltfLoader.loadAsync(base + 'models/' + o.id + '.glb'), root = gltf.scene, holder = new THREE.Group();
+        root.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), s = o.width_m / Math.max(size.x, size.z, 1e-6);
+        root.scale.setScalar(s); root.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s); holder.add(root);
+        root.traverse(m => { if (!m.isMesh) return; m.castShadow = m.receiveShadow = true; m.material.roughness = 1; m.material.metalness = 0; if (m.material.map) m.material.map.anisotropy = 4; });
+        return { o, holder, height: size.y * s };
+      } catch (e) { console.warn('model missing', id, o.id, e.message); return null; }
+      finally { done++; if (token === S.token) progress(0.05 + 0.7 * done / total, '加载模型 ' + done + ' / ' + total); }
+    }))).filter(Boolean);
+    if (token !== S.token) return;
+    progress(0.8, '摆放物体'); await tick();
+    let count = 0;
+    for (const m of models) {
+      m.pts = m.o.leafy ? null : samplePoints(m.holder, !m.o.lathe);      // a spun trunk is solid all round, even where gaps between its roots are cut out of the picture
+      for (const at of m.o.at) { const [x, z, yaw, s] = place(at, Wm, Dm), inst = m.holder.clone(); inst.position.set(x, 0, z); inst.rotation.y = yaw; inst.scale.setScalar(s); world.add(inst); count++; }
+    }
+    progress(0.92, '计算可行走区域'); await tick();
+    Object.assign(S, buildGrid(models, Wm, Dm), { spec, Wm, Dm, world });
+    for (const m of models) m.pts = null;
+    scene.add(world); findSpawn(); respawn();
+    $('mapNo').textContent = id; $('mapInfo').textContent = models.length + ' 种物体 · ' + count + ' 处摆放';
+    $('orig').src = base + S.files.source;
+    if (location.hash !== '#' + id) history.replaceState(null, '', '#' + id);
+    $('loading').hidden = true; $('hud').hidden = false; S.busy = false; S.last = performance.now();
+  } catch (e) {
+    console.error(e); if (token !== S.token) return;
+    $('loadText').textContent = '这张地图加载失败：' + e.message; setTimeout(() => { if (token === S.token) showMenu(); }, 1800);
+  }
+}
+
+// A published copy carries site.json (the map list and the names of its shrunken pictures); the local server answers /api/maps instead.
+S.files = { ground: 'refs/ground.png', source: 'source.png', thumb: 'source.png' };
+async function loadList(fresh) {
+  if (S.list.length && (S.static || !fresh)) return S.list;
+  if (S.static === undefined) {
+    try { const r = await fetch('./site.json', { cache: 'no-cache' }); if (r.ok) { const j = await r.json(); S.static = true; S.files = j.files; return (S.list = j.maps); } } catch (e) { /* not a published copy */ }
+    S.static = false;
+  }
+  try { S.list = await (await fetch('/api/maps', { cache: 'no-store' })).json(); } catch (e) { /* keep what is there */ }
+  return S.list;
+}
+async function showMenu() {
+  S.token++; S.id = null; S.busy = false; disposeWorld();
+  $('hud').hidden = true; $('loading').hidden = true; $('menu').hidden = false;
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  const list = await loadList(true);
+  $('menuNote').textContent = list.length && S.static ? '共 ' + list.length + ' 张' + (list.length < 100 ? '（其余还在制作，会陆续补上）' : '') + '，点一张进去走走。地图原画出自《赛尔号》壁纸，场景里的每个物体都是照原画单独建模、再摆回原位的。' : list.length ? '已建好 ' + list.length + ' / 100 张，点一张进去走走。还在后台生成的地图，刷新本页后会出现。' : '还没有建好的地图。';
+  $('grid').innerHTML = list.map(m => '<a class="card" href="#' + m.id + '"><img loading="lazy" decoding="async" alt="" src="../maps/' + m.id + '/' + S.files.thumb + '"><div><b>' + m.id + '</b><span>' + m.objects + ' 种物体 · ' + m.instances + ' 处</span></div></a>').join('');
+}
+async function route() {
+  const id = (location.hash.slice(1) || new URLSearchParams(location.search).get('map') || '');
+  if (/^\d{3}$/.test(id)) { await loadList(); if (id !== S.id || (!S.world && !S.busy)) enter(id); }
+  else showMenu();
+}
+window.addEventListener('hashchange', route);
+function neighbour(d) { if (!S.list.length || !S.id) return; const k = S.list.findIndex(m => m.id === S.id), n = S.list.length; location.hash = '#' + S.list[((k < 0 ? 0 : k) + d + n) % n].id; }
+
+// ---------- controls ----------
+const VIEWS = { third: '第三人称', first: '第一人称', over: '原图机位' };
+function setView(m) { S.mode = m; $('viewName').textContent = VIEWS[m]; S.pitch = m === 'first' ? 0 : 0.3; if (m === 'third') S.camD = S.dist; }
+function act(a) {
+  if (a === 'view') setView(S.mode === 'third' ? 'first' : S.mode === 'first' ? 'over' : 'third');
+  else if (a === 'orig') $('orig').hidden = !$('orig').hidden;
+  else if (a === 'prev') neighbour(-1); else if (a === 'next') neighbour(1);
+  else if (a === 'menu') { location.hash = ''; showMenu(); }
+  else if (a === 'respawn') respawn();
+}
+$('btns').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { act(b.dataset.act); b.blur(); } });
+const KEYACT = { KeyV: 'view', KeyP: 'orig', BracketLeft: 'prev', BracketRight: 'next', KeyM: 'menu', KeyR: 'respawn' };
+window.addEventListener('keydown', e => {
+  if (!S.world || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.code === 'Space') { S.jump = true; e.preventDefault(); return; }
+  if (KEYACT[e.code]) { if (!e.repeat) act(KEYACT[e.code]); return; }
+  S.keys.add(e.code); if (e.code.startsWith('Arrow')) e.preventDefault();
+});
+window.addEventListener('keyup', e => S.keys.delete(e.code));
+window.addEventListener('blur', () => S.keys.clear());
+let look = null, stickId = null, stick0 = null;
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  if (e.pointerType === 'touch') { $('stick').hidden = false; $('jump').hidden = false; }
+  if (e.pointerType === 'touch' && stickId === null && e.clientX < innerWidth * 0.42 && e.clientY > innerHeight * 0.35) { stickId = e.pointerId; stick0 = [e.clientX, e.clientY]; return; }
+  if (!look) { look = { id: e.pointerId, x: e.clientX, y: e.clientY }; canvas.classList.add('drag'); }
+});
+canvas.addEventListener('pointermove', e => {
+  if (e.pointerId === stickId) { const dx = clamp((e.clientX - stick0[0]) / 52, -1, 1), dy = clamp((e.clientY - stick0[1]) / 52, -1, 1); S.stick.x = dx; S.stick.y = dy; $('stick').firstElementChild.style.transform = 'translate(' + dx * 34 + 'px,' + dy * 34 + 'px)'; return; }
+  if (!look || e.pointerId !== look.id || S.mode === 'over') return;
+  S.yaw -= (e.clientX - look.x) * 0.0046; S.pitch = clamp(S.pitch + (e.clientY - look.y) * 0.0036, S.mode === 'first' ? -1.25 : -0.12, S.mode === 'first' ? 1.25 : 1.35); look.x = e.clientX; look.y = e.clientY;
+});
+const release = e => { if (e.pointerId === stickId) { stickId = null; S.stick.x = S.stick.y = 0; $('stick').firstElementChild.style.transform = ''; } if (look && e.pointerId === look.id) { look = null; canvas.classList.remove('drag'); } };
+canvas.addEventListener('pointerup', release); canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('wheel', e => { e.preventDefault(); if (S.mode === 'third') S.dist = clamp(S.dist * Math.exp(e.deltaY * 0.0012), 1.6, 10); }, { passive: false });
+$('jump').addEventListener('pointerdown', e => { e.preventDefault(); S.jump = true; });
+
+// ---------- one frame ----------
+function step(dt) {
+  const P = S.P, K = S.keys;
+  let f = (K.has('KeyW') || K.has('ArrowUp') ? 1 : 0) - (K.has('KeyS') || K.has('ArrowDown') ? 1 : 0) - S.stick.y, r = (K.has('KeyD') || K.has('ArrowRight') ? 1 : 0) - (K.has('KeyA') || K.has('ArrowLeft') ? 1 : 0) + S.stick.x;
+  const len = Math.hypot(f, r); if (len > 1) { f /= len; r /= len; }
+  const yaw = S.mode === 'over' ? 0 : S.yaw, sp = K.has('ShiftLeft') || K.has('ShiftRight') ? 6.2 : 3.4;
+  const vx = (-Math.sin(yaw) * f + Math.cos(yaw) * r) * sp, vz = (-Math.cos(yaw) * f - Math.sin(yaw) * r) * sp;
+  const n = Math.max(1, Math.ceil(Math.hypot(vx, vz) * dt / 0.05)), x0 = P.x, z0 = P.z;
+  for (let k = 0; k < n; k++) {
+    const dx = vx * dt / n, dz = vz * dt / n;
+    if (dx && blockH(P.x + dx, P.z) - P.y <= STEP) P.x += dx;
+    if (dz && blockH(P.x, P.z + dz) - P.y <= STEP) P.z += dz;
+  }
+  const fl = floorH(P.x, P.z);
+  if (P.ground) { if (fl < P.y - STEP) { P.ground = false; P.vy = 0; } else P.y = fl; }
+  if (S.jump && P.ground) { P.vy = JUMP; P.ground = false; }
+  S.jump = false;
+  if (!P.ground) { P.vy -= GRAV * dt; P.y += P.vy * dt; if (P.y <= fl) { P.y = fl; P.vy = 0; P.ground = true; } }
+  P.speed = Math.hypot(P.x - x0, P.z - z0) / Math.max(dt, 1e-4);
+  if (len > 0.05) { const want = Math.atan2(vx, vz); let d = want - P.head; d = Math.atan2(Math.sin(d), Math.cos(d)); P.head += d * Math.min(1, dt * 12); }
+  P.phase += P.speed * dt * 2.6;
+  const sw = P.ground ? Math.sin(P.phase) * Math.min(1, P.speed / 3) * 0.75 : 0.5;
+  limbs['leg-1'].rotation.x = sw; limbs.leg1.rotation.x = -sw; limbs['arm-1'].rotation.x = -sw * 0.8; limbs.arm1.rotation.x = sw * 0.8;
+  S.camY += (P.y - S.camY) * Math.min(1, dt * 14);
+  hero.position.set(P.x, S.camY + (P.ground ? Math.abs(Math.sin(P.phase)) * 0.035 * Math.min(1, P.speed / 3) : 0), P.z); hero.rotation.y = P.head;
+}
+function softH(x, z) { const h = gAt(x, z); return h > 90 ? 0 : h; }
+function placeCamera(dt) {
+  const P = S.P, aspect = canvas.clientWidth / Math.max(1, canvas.clientHeight); let fov = 58;
+  if (S.mode === 'first') { fov = 72; camera.position.set(P.x, S.camY + 1.5, P.z); camera.rotation.set(-S.pitch, S.yaw, 0); hero.visible = false; }
+  else if (S.mode === 'third') {
+    const tx = P.x, ty = S.camY + 1.28, tz = P.z, el = S.pitch, cx = Math.sin(S.yaw) * Math.cos(el), cy = Math.sin(el), cz = Math.cos(S.yaw) * Math.cos(el);
+    let d = S.dist;                       // keep solid things out from between the camera and the walker
+    for (let k = 1; k <= 28; k++) { const t = S.dist * k / 28, y = ty + cy * t; if (y < 0.12 || softH(tx + cx * t, tz + cz * t) > y - 0.08) { d = Math.max(0.45, S.dist * (k - 1) / 28); break; } }
+    S.camD += (d - S.camD) * (d < S.camD ? 1 : Math.min(1, dt * 5));
+    camera.position.set(tx + cx * S.camD, ty + cy * S.camD, tz + cz * S.camD); camera.lookAt(tx, ty, tz); hero.visible = S.camD > 0.95;
+  } else {                                // the original picture's own view, as in tools/assemble.py
+    const phi = Math.atan(clamp(+(S.spec.world.cam_tan || 0.45), 0.35, 0.9)), dist = 25;
+    fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(27.2)) / Math.max(aspect, 1.2)));
+    camera.position.set(0, 0.8 + dist * Math.sin(phi), dist * Math.cos(phi) - 0.5); camera.lookAt(0, 0.8, -0.5); hero.visible = true;
+  }
+  if (camera.fov !== fov || camera.aspect !== aspect) { camera.fov = fov; camera.aspect = aspect; camera.updateProjectionMatrix(); }
+}
+function resize() { const w = canvas.clientWidth, h = canvas.clientHeight; if (canvas.width !== Math.round(w * renderer.getPixelRatio()) || canvas.height !== Math.round(h * renderer.getPixelRatio())) renderer.setSize(w, h, false); }
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!S.world || S.busy) return;
+  const dt = Math.min(0.05, Math.max(0.001, (now - (S.last || now)) / 1000)); S.last = now;
+  resize(); step(dt); placeCamera(dt); renderer.render(scene, camera);
+}
+S.api = { enter, setView, respawn, gAt, step, placeCamera, render: () => { resize(); placeCamera(0.016); renderer.render(scene, camera); } };
+requestAnimationFrame(frame);
+route();
+</script>
+</body>
+</html>
