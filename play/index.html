@@ -90,6 +90,9 @@ Object.assign(sun.shadow.camera, { left: -19, right: 19, top: 19, bottom: -19, n
 scene.add(sun, sun.target);
 const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder), texLoader = new THREE.TextureLoader();
 
+// ?models=<folder> shows a map with the models of another modelling route (e.g. models_hy3d) for comparison; those are real 3D
+// shapes turned to face the picture's camera, so they are sized by their width as the picture shows it, not by their longest side.
+const MODELS = (new URLSearchParams(location.search).get('models') || '').replace(/[^\w-]/g, '') || 'models', FIT_X = MODELS !== 'models';
 const CELL = 0.08, STEP = 0.35, RADIUS = 0.26, GRAV = 14, JUMP = 5.6;
 const S = { id: null, list: [], spec: null, world: null, top: null, GW: 0, GD: 0, Wm: 24, Dm: 16, mode: 'third', yaw: 0, pitch: 0.3, dist: 4.4, camD: 4.4, camY: 0,
   P: { x: 0, z: 0, y: 0, vy: 0, ground: true, head: Math.PI, phase: 0, speed: 0 }, spawn: { x: 0, z: 0, yaw: 0 }, keys: new Set(), stick: { x: 0, y: 0 }, jump: false, busy: false, token: 0 };
@@ -228,9 +231,9 @@ async function enter(id) {
     let done = 0; const total = spec.objects.length;
     const models = (await Promise.all(spec.objects.map(async o => {
       try {
-        const gltf = await gltfLoader.loadAsync(base + 'models/' + o.id + '.glb'), root = gltf.scene, holder = new THREE.Group();
+        const gltf = await gltfLoader.loadAsync(base + MODELS + '/' + o.id + '.glb'), root = gltf.scene, holder = new THREE.Group();
         root.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), s = o.width_m / Math.max(size.x, size.z, 1e-6);
+        const box = new THREE.Box3().setFromObject(root), size = box.getSize(new THREE.Vector3()), s = o.width_m / Math.max(size.x, FIT_X || o.fit === 'x' ? 0 : size.z, 1e-6);
         root.scale.setScalar(s); root.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s); holder.add(root);
         root.traverse(m => { if (!m.isMesh) return; m.castShadow = m.receiveShadow = true; m.material.roughness = 1; m.material.metalness = 0; if (m.material.map) m.material.map.anisotropy = 4; });
         return { o, holder, height: size.y * s };
